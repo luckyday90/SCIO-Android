@@ -1,4 +1,4 @@
-# SCiO Material Memory Android 1.0
+# SCiO Material Memory Android 1.1.0
 
 Applicazione Android nativa sperimentale per acquisire notifiche BLE dallo SCiO, registrare pacchetti grezzi, ricomporre tre sezioni di scansione e costruire una libreria locale di impronte dei materiali.
 
@@ -12,10 +12,12 @@ Applicazione Android nativa sperimentale per acquisire notifiche BLE dallo SCiO,
 - controllo delle tre sezioni e timeout;
 - archivio SQLite dei materiali e delle letture;
 - confronto interno delle impronte grezze;
+- importazione persistente degli spettri CSV `band740`–`band1070`;
+- importazione degli export sviluppatore `spectrum_*`, `wr_raw_*` e `sample_raw_*`;
 - esportazione JSON;
 - compilazione locale con Android Studio oppure online con GitHub Actions.
 
 ## Avvertenza
 Non è un'app ufficiale Consumer Physics. La conversione proprietaria nei 331 valori spettrali normalizzati non è disponibile. Temperatura, batteria e riferimento bianco devono essere verificati sul dispositivo reale e i byte grezzi restano sempre la fonte primaria.
 
-Leggere `docs/COMPILAZIONE_MAC.md` e `docs/PRIMO_TEST.md`.
+Leggere `docs/COMPILAZIONE_MAC.md`, `docs/IMPORTAZIONE_CSV.md` e `docs/PRIMO_TEST.md`.

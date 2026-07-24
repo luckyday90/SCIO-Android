@@ -16,4 +16,4 @@
 4. Al termine scaricare l'artefatto `SCiO-Material-Memory-debug-apk`.
 5. Estrarre e trasferire `app-debug.apk` sul telefono.
 
-Il workflow è in `.github/workflows/build-apk.yml`.
+Il workflow è in `../../.github/workflows/build-android-apk.yml`.

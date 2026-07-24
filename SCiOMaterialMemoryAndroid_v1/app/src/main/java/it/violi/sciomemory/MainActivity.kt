@@ -26,9 +26,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -101,7 +101,7 @@ private fun ScioMaterialMemoryApp(vm: ScioViewModel = viewModel()) {
                 title = {
                     Column {
                         Text("SCiO Material Memory", fontWeight = FontWeight.Bold)
-                        Text("Acquisizione BLE sperimentale 1.0", style = MaterialTheme.typography.labelSmall)
+                        Text("BLE e importazione spettri · 1.1.0", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             )
@@ -109,7 +109,7 @@ private fun ScioMaterialMemoryApp(vm: ScioViewModel = viewModel()) {
         snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            ScrollableTabRow(selectedTabIndex = selectedTab) {
+            PrimaryScrollableTabRow(selectedTabIndex = selectedTab) {
                 AppTab.entries.forEachIndexed { index, tab ->
                     Tab(
                         selected = selectedTab == index,
@@ -441,8 +441,16 @@ private fun DataScreen(vm: ScioViewModel) {
     val packets by vm.ble.packetLog.collectAsState()
     val protocolMessages by vm.ble.protocolMessages.collectAsState()
     val storedScans by vm.storedScans.collectAsState()
+    val csvImports by vm.csvImports.collectAsState()
+    val csvImporting by vm.csvImporting.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) vm.importCsv(uri)
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -463,12 +471,67 @@ private fun DataScreen(vm: ScioViewModel) {
     ) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        importLauncher.launch(
+                            arrayOf(
+                                "text/csv",
+                                "text/comma-separated-values",
+                                "application/csv",
+                                "text/plain"
+                            )
+                        )
+                    },
+                    enabled = !csvImporting
+                ) {
+                    Text(if (csvImporting) "Importazione..." else "Importa CSV")
+                }
                 Button(onClick = { exportLauncher.launch("scio-material-memory.json") }) {
                     Text("Esporta JSON")
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = vm.ble::clearLog) { Text("Pulisci log") }
             }
             Text("Scansioni archiviate: ${storedScans.size}")
+        }
+
+        item {
+            SectionTitle("Importazioni CSV SCiO")
+            Text(
+                "Sono supportati band740–band1070 e gli export con spectrum_*, wr_raw_* e sample_raw_*.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        if (csvImports.isEmpty()) {
+            item { Text("Nessun CSV importato.") }
+        } else {
+            items(csvImports, key = { it.id }) { csvImport ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(csvImport.fileName, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${csvImport.recordCount} record · " +
+                                "${csvImport.layout.name.lowercase()} · " +
+                                "${"%.0f".format(csvImport.wavelengthStart)}–" +
+                                "${"%.0f".format(csvImport.wavelengthEnd)} nm"
+                        )
+                        Text(
+                            csvImport.groups.joinToString(" · ") { it.csvPrefix },
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            DateFormat.getDateTimeInstance().format(Date(csvImport.importedAt)),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        TextButton(onClick = { vm.deleteCsvImport(csvImport.id) }) {
+                            Text("Elimina importazione")
+                        }
+                    }
+                }
+            }
         }
 
         if (protocolMessages.isNotEmpty()) {

@@ -1,10 +1,40 @@
 package it.violi.sciomemory.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScioScanAssemblerTest {
+    @Test
+    fun parsesSignedTemperatureValues() {
+        val packet = byteArrayOf(
+            0x01,
+            0xBA.toByte(),
+            0x04,
+            0xD2.toByte(),
+            0x04,
+            0xC9.toByte(),
+            0xFD.toByte(),
+            0x00,
+            0x00
+        )
+
+        val reading = requireNotNull(ScioProtocol.parseTemperature(packet))
+
+        assertEquals(12.34, reading.first, 0.001)
+        assertEquals(-5.67, reading.second, 0.001)
+        assertEquals(0.0, reading.third, 0.001)
+    }
+
+    @Test
+    fun rejectsPacketsWithInvalidProtocolMarker() {
+        val packet = byteArrayOf(0x01, 0x00, 0x05, 0x64)
+
+        assertNull(ScioProtocol.responseType(packet))
+        assertNull(ScioProtocol.parseBatteryPercent(packet))
+    }
+
     @Test
     fun reconstructsThreeSections() {
         val assembler = ScioScanAssembler()

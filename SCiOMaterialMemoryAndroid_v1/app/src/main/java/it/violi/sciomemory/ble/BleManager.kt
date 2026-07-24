@@ -32,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,7 +43,8 @@ import java.util.UUID
 class BleManager(private val context: Context) {
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter? = bluetoothManager?.adapter
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val managerJob = SupervisorJob()
+    private val scope = CoroutineScope(managerJob + Dispatchers.Main.immediate)
     private val assembler = ScioScanAssembler()
 
     private var bluetoothGatt: BluetoothGatt? = null
@@ -121,6 +123,10 @@ class BleManager(private val context: Context) {
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (gatt !== bluetoothGatt) {
+                closeGatt(gatt)
+                return
+            }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectedAddress.value = gatt.device.address
@@ -131,6 +137,7 @@ class BleManager(private val context: Context) {
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    closeGatt(gatt)
                     clearConnection("Disconnesso dallo SCiO")
                 }
                 else -> {
@@ -191,6 +198,7 @@ class BleManager(private val context: Context) {
         }
 
         @Deprecated("Compatibilità con Android precedenti ad API 33")
+        @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
@@ -207,6 +215,7 @@ class BleManager(private val context: Context) {
         }
 
         @Deprecated("Compatibilità con Android precedenti ad API 33")
+        @Suppress("DEPRECATION")
         override fun onCharacteristicRead(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
@@ -324,13 +333,18 @@ class BleManager(private val context: Context) {
         assemblyTimeoutJob?.cancel()
         assembler.reset()
         _scanProgress.value = ScanProgress()
+        val gatt = bluetoothGatt
+        clearConnection("Bluetooth non connesso")
         if (hasConnectPermission()) {
             @SuppressLint("MissingPermission")
-            bluetoothGatt?.disconnect()
-            @SuppressLint("MissingPermission")
-            bluetoothGatt?.close()
+            gatt?.disconnect()
         }
-        clearConnection("Bluetooth non connesso")
+        gatt?.let(::closeGatt)
+    }
+
+    fun close() {
+        disconnect()
+        scope.cancel()
     }
 
     fun read(info: GattCharacteristicInfo) {
@@ -404,12 +418,7 @@ class BleManager(private val context: Context) {
             @SuppressLint("MissingPermission")
             gatt.writeCharacteristic(characteristic, command, writeType) == BluetoothGatt.GATT_SUCCESS
         } else {
-            @Suppress("DEPRECATION")
-            characteristic.writeType = writeType
-            @Suppress("DEPRECATION")
-            characteristic.value = command
-            @SuppressLint("MissingPermission", "DEPRECATION")
-            gatt.writeCharacteristic(characteristic)
+            writeCharacteristicLegacy(gatt, characteristic, command, writeType)
         }
 
         if (accepted) {
@@ -532,10 +541,7 @@ class BleManager(private val context: Context) {
             @SuppressLint("MissingPermission")
             gatt.writeDescriptor(descriptor, value) == BluetoothGatt.GATT_SUCCESS
         } else {
-            @Suppress("DEPRECATION")
-            descriptor.value = value
-            @SuppressLint("MissingPermission", "DEPRECATION")
-            gatt.writeDescriptor(descriptor)
+            writeDescriptorLegacy(gatt, descriptor, value)
         }
         if (!accepted) {
             _connectionState.value = BleConnectionState.ERROR
@@ -560,6 +566,35 @@ class BleManager(private val context: Context) {
         _characteristics.value = emptyList()
         _connectionState.value = BleConnectionState.DISCONNECTED
         _statusMessage.value = message
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun closeGatt(gatt: BluetoothGatt) {
+        runCatching { gatt.close() }
+    }
+
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    private fun writeCharacteristicLegacy(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray,
+        writeType: Int
+    ): Boolean {
+        characteristic.writeType = writeType
+        characteristic.value = value
+        return gatt.writeCharacteristic(characteristic)
+    }
+
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    private fun writeDescriptorLegacy(
+        gatt: BluetoothGatt,
+        descriptor: BluetoothGattDescriptor,
+        value: ByteArray
+    ): Boolean {
+        descriptor.value = value
+        return gatt.writeDescriptor(descriptor)
     }
 
     private fun addProtocolMessage(message: String) {

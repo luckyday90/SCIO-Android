@@ -2,6 +2,9 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -9,11 +12,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: android-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: SCiOMaterialMemoryAndroid_v1
 
     steps:
       - name: Scarica il progetto
@@ -26,25 +36,24 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Compila APK
-        shell: bash
+      - name: Verifica Gradle Wrapper
         run: |
-          GRADLEW="$(find . -maxdepth 3 -type f -name gradlew -print -quit)"
-
-          if [ -z "$GRADLEW" ]; then
-            echo "Errore: il file gradlew non e stato trovato."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$GRADLEW")"
-          cd "$PROJECT_DIR"
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f gradle/wrapper/gradle-wrapper.jar
           chmod +x gradlew
-          ./gradlew clean assembleDebug --stacktrace
+
+      - name: Test e compilazione Gradle
+        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace --no-daemon
+
+      - name: Verifica app-debug.apk
+        run: test -s app/build/outputs/apk/debug/app-debug.apk
 
       - name: Salva APK
         uses: actions/upload-artifact@v7
         with:
-          name: SCiOMaterialMemoryAndroid-debug-APK
-          path: "**/app/build/outputs/apk/debug/*.apk"
+          name: SCiO-Material-Memory-debug-apk
+          path: SCiOMaterialMemoryAndroid_v1/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30

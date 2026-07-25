@@ -17,6 +17,18 @@ object ScioCsvImporter {
         """^(spectrum|wr_raw|sample_raw)_(\d+(?:\.\d+)?)$""",
         RegexOption.IGNORE_CASE
     )
+    private val wavelengthHeaders = setOf(
+        "wavelength",
+        "wavelength_nm",
+        "wavelengths",
+        "nm"
+    )
+    private val signalHeaders = setOf(
+        "reflectance",
+        "spectrum",
+        "absorbance",
+        "intensity"
+    )
     private val knownTypeNames = setOf(
         "bool",
         "boolean",
@@ -45,14 +57,20 @@ object ScioCsvImporter {
 
         val groupedIndex = rows.indexOfFirst { extractGroupedColumns(it.fields).size >= MIN_SPECTRAL_COLUMNS }
         val bandIndex = rows.indexOfFirst { extractBandColumns(it.fields).size >= MIN_SPECTRAL_COLUMNS }
+        val axisFirstIndex = rows.indexOfFirst { extractAxisFirstColumns(it.fields) != null }
 
         return when {
-            groupedIndex >= 0 && (bandIndex < 0 || groupedIndex <= bandIndex) ->
+            groupedIndex >= 0 &&
+                (bandIndex < 0 || groupedIndex <= bandIndex) &&
+                (axisFirstIndex < 0 || groupedIndex <= axisFirstIndex) ->
                 parseGrouped(sourceName, rows, groupedIndex)
-            bandIndex >= 0 -> parseBand(sourceName, rows, bandIndex)
+            bandIndex >= 0 && (axisFirstIndex < 0 || bandIndex <= axisFirstIndex) ->
+                parseBand(sourceName, rows, bandIndex)
+            axisFirstIndex >= 0 -> parseAxisFirst(sourceName, rows, axisFirstIndex)
             else -> throw IllegalArgumentException(
                 "Formato SCiO non riconosciuto: servono le colonne band740–band1070 " +
-                    "oppure i gruppi spectrum_*, wr_raw_* e sample_raw_*."
+                    "oppure i gruppi spectrum_*, wr_raw_* e sample_raw_*, " +
+                    "o una tabella wavelength/reflectance."
             )
         }
     }
@@ -91,12 +109,7 @@ object ScioCsvImporter {
         }
 
         val spectralIndexes = columnsByGroup.values.flatten().mapTo(hashSetOf()) { it.index }
-        val preamble = linkedMapOf<String, String>()
-        rows.take(headerIndex).forEach { row ->
-            val key = row.fields.getOrNull(0)?.trim().orEmpty()
-            val value = row.fields.getOrNull(1)?.trim().orEmpty()
-            if (key.isNotBlank()) preamble[key] = value
-        }
+        val preamble = extractPreamble(rows, headerIndex)
 
         val records = parseDataRows(rows, headerIndex, header) { row, metadata, recordNumber ->
             val series = columnsByGroup.mapValues { (group, columns) ->
@@ -114,6 +127,65 @@ object ScioCsvImporter {
         }
         require(records.isNotEmpty()) { "L'export sviluppatore SCiO non contiene righe di dati." }
         return ScioCsvImport(sourceName, ScioCsvLayout.GROUPED, preamble, records)
+    }
+
+    private fun parseAxisFirst(
+        sourceName: String,
+        rows: List<CsvRow>,
+        headerIndex: Int
+    ): ScioCsvImport {
+        val header = rows[headerIndex].fields
+        val columns = requireNotNull(extractAxisFirstColumns(header))
+        val points = mutableListOf<SpectralPoint>()
+
+        rows.drop(headerIndex + 1).forEach { row ->
+            if (row.fields.all { it.isBlank() }) return@forEach
+            val rawWavelength = row.fields.getOrNull(columns.wavelengthIndex)?.trim().orEmpty()
+            val rawValue = row.fields.getOrNull(columns.valueIndex)?.trim().orEmpty()
+            if (rawWavelength.isBlank() || rawValue.isBlank()) {
+                throw row.error("Lunghezza d'onda o valore spettrale assente.")
+            }
+            val wavelength = rawWavelength.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0.0 }
+                ?: throw row.error("Lunghezza d'onda non numerica o non valida.")
+            val value = rawValue.toDoubleOrNull()
+                ?.takeIf { it.isFinite() }
+                ?: throw row.error(
+                    "Valore ${columns.valueHeader} non numerico a ${formatWavelength(wavelength)} nm."
+                )
+            points += SpectralPoint(row.lineNumber, wavelength, value)
+        }
+
+        require(points.size >= 2) {
+            "La tabella asse-valore deve contenere almeno due punti spettrali."
+        }
+        require(points.map { it.wavelength }.distinct().size == points.size) {
+            "La tabella asse-valore contiene lunghezze d'onda duplicate."
+        }
+
+        val sortedPoints = points.sortedBy { it.wavelength }
+        val preamble = extractPreamble(rows, headerIndex)
+        val sampleId = sourceName
+            .substringAfterLast('/')
+            .substringBeforeLast('.')
+            .ifBlank { "record-1" }
+        val record = ScioCsvRecord(
+            sourceRow = points.first().lineNumber,
+            sampleId = sampleId,
+            metadata = mapOf("value_column" to columns.valueHeader),
+            series = mapOf(
+                SpectralGroup.SPECTRUM to SpectralSeries(
+                    wavelengths = sortedPoints.map { it.wavelength }.toDoubleArray(),
+                    values = sortedPoints.map { it.value }.toDoubleArray()
+                )
+            )
+        )
+        return ScioCsvImport(
+            sourceName = sourceName,
+            layout = ScioCsvLayout.AXIS_FIRST,
+            preamble = preamble,
+            records = listOf(record)
+        )
     }
 
     private fun parseDataRows(
@@ -194,6 +266,32 @@ object ScioCsvImporter {
             }
             val wavelength = match.groupValues[2].toDoubleOrNull() ?: return@mapIndexedNotNull null
             SpectralColumn(index, wavelength, group)
+        }
+
+    private fun extractAxisFirstColumns(header: List<String>): AxisFirstColumns? {
+        val normalized = header.map(::normalizeHeader)
+        val wavelengthIndex = normalized.indexOfFirst { it in wavelengthHeaders }
+        val valueIndex = normalized.indexOfFirst { it in signalHeaders }
+        if (wavelengthIndex < 0 || valueIndex < 0 || wavelengthIndex == valueIndex) return null
+        return AxisFirstColumns(
+            wavelengthIndex = wavelengthIndex,
+            valueIndex = valueIndex,
+            valueHeader = normalized[valueIndex]
+        )
+    }
+
+    private fun normalizeHeader(value: String): String =
+        value.trim()
+            .lowercase()
+            .replace(Regex("""[\s-]+"""), "_")
+
+    private fun extractPreamble(rows: List<CsvRow>, headerIndex: Int): Map<String, String> =
+        linkedMapOf<String, String>().apply {
+            rows.take(headerIndex).forEach { row ->
+                val key = row.fields.getOrNull(0)?.trim().orEmpty()
+                val value = row.fields.getOrNull(1)?.trim().orEmpty()
+                if (key.isNotBlank()) this[key] = value
+            }
         }
 
     private fun sampleId(metadata: Map<String, String>, recordNumber: Int): String =
@@ -280,5 +378,17 @@ object ScioCsvImporter {
         val index: Int,
         val wavelength: Double,
         val group: SpectralGroup
+    )
+
+    private data class AxisFirstColumns(
+        val wavelengthIndex: Int,
+        val valueIndex: Int,
+        val valueHeader: String
+    )
+
+    private data class SpectralPoint(
+        val lineNumber: Int,
+        val wavelength: Double,
+        val value: Double
     )
 }

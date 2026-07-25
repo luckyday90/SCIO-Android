@@ -1,8 +1,9 @@
 package it.violi.sciomemory.csv
 
-enum class ScioCsvLayout {
-    BAND,
-    GROUPED
+enum class ScioCsvLayout(val displayName: String) {
+    BAND("band"),
+    GROUPED("gruppi"),
+    AXIS_FIRST("asse-valore")
 }
 
 enum class SpectralGroup(val csvPrefix: String) {

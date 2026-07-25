@@ -13,6 +13,7 @@ Funzioni principali:
 - confronto sperimentale;
 - importazione persistente dei CSV SCiO con colonne `band740`–`band1070`;
 - importazione degli export sviluppatore con `spectrum_*`, `wr_raw_*` e `sample_raw_*`;
+- importazione delle tabelle verticali `wavelength,reflectance`;
 - esportazione JSON.
 
 Guida completa: [`docs/COMPILAZIONE_MAC.md`](docs/COMPILAZIONE_MAC.md).

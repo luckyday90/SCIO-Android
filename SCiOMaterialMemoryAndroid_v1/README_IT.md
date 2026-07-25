@@ -14,6 +14,7 @@ Applicazione Android nativa sperimentale per acquisire notifiche BLE dallo SCiO,
 - confronto interno delle impronte grezze;
 - importazione persistente degli spettri CSV `band740`–`band1070`;
 - importazione degli export sviluppatore `spectrum_*`, `wr_raw_*` e `sample_raw_*`;
+- importazione delle tabelle verticali `wavelength,reflectance`;
 - esportazione JSON;
 - compilazione locale con Android Studio oppure online con GitHub Actions.
 

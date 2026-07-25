@@ -5,6 +5,10 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Base64
+import it.violi.sciomemory.csv.CsvImportSummary
+import it.violi.sciomemory.csv.ScioCsvImport
+import it.violi.sciomemory.csv.ScioCsvLayout
+import it.violi.sciomemory.csv.SpectralGroup
 import it.violi.sciomemory.model.MaterialProfile
 import it.violi.sciomemory.model.ScioScan
 import it.violi.sciomemory.model.StoredScan
@@ -34,6 +38,7 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
             """.trimIndent()
         )
         createScansTable(db)
+        createCsvImportsTable(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -44,6 +49,9 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             createScansTable(db)
+        }
+        if (oldVersion < 3) {
+            createCsvImportsTable(db)
         }
     }
 
@@ -69,6 +77,26 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_scans_material ON scans(material_id)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_scans_date ON scans(captured_at)")
+    }
+
+    private fun createCsvImportsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS csv_imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                layout TEXT NOT NULL,
+                imported_at INTEGER NOT NULL,
+                record_count INTEGER NOT NULL,
+                wavelength_start REAL NOT NULL,
+                wavelength_end REAL NOT NULL,
+                groups_csv TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL UNIQUE,
+                payload_json TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_csv_imports_date ON csv_imports(imported_at)")
     }
 
     fun createMaterial(name: String, category: String, notes: String): Long {
@@ -163,12 +191,69 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun hasCsvImport(sourceSha256: String): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM csv_imports WHERE source_sha256 = ? LIMIT 1",
+            arrayOf(sourceSha256)
+        ).use { it.moveToFirst() }
+
+    fun addCsvImport(csvImport: ScioCsvImport, sourceSha256: String): Long {
+        require(csvImport.records.isNotEmpty()) { "Nessun record CSV da archiviare." }
+        val values = ContentValues().apply {
+            put("file_name", csvImport.sourceName)
+            put("layout", csvImport.layout.name)
+            put("imported_at", System.currentTimeMillis())
+            put("record_count", csvImport.records.size)
+            put("wavelength_start", csvImport.wavelengthStart)
+            put("wavelength_end", csvImport.wavelengthEnd)
+            put("groups_csv", csvImport.groups.joinToString(",") { it.name })
+            put("source_sha256", sourceSha256)
+            put("payload_json", csvImport.toJson().toString())
+        }
+        return writableDatabase.insertOrThrow("csv_imports", null, values)
+    }
+
+    fun listCsvImports(): List<CsvImportSummary> {
+        val sql = """
+            SELECT id, file_name, layout, imported_at, record_count,
+                   wavelength_start, wavelength_end, groups_csv
+            FROM csv_imports
+            ORDER BY imported_at DESC
+        """.trimIndent()
+        return readableDatabase.rawQuery(sql, null).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val groups = cursor.getString(7)
+                        .split(',')
+                        .mapNotNull { name -> runCatching { SpectralGroup.valueOf(name) }.getOrNull() }
+                        .toSet()
+                    add(
+                        CsvImportSummary(
+                            id = cursor.getLong(0),
+                            fileName = cursor.getString(1),
+                            layout = ScioCsvLayout.valueOf(cursor.getString(2)),
+                            importedAt = cursor.getLong(3),
+                            recordCount = cursor.getInt(4),
+                            wavelengthStart = cursor.getDouble(5),
+                            wavelengthEnd = cursor.getDouble(6),
+                            groups = groups
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteCsvImport(importId: Long) {
+        writableDatabase.delete("csv_imports", "id = ?", arrayOf(importId.toString()))
+    }
+
     fun exportJson(): String {
         val materials = listMaterials()
         val scans = listScans()
         val root = JSONObject()
             .put("format", "SCiO Material Memory")
-            .put("version", 2)
+            .put("version", 3)
             .put("exported_at", System.currentTimeMillis())
 
         val materialArray = JSONArray()
@@ -203,8 +288,57 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
             )
         }
         root.put("materials", materialArray)
+        val csvImports = JSONArray()
+        readableDatabase.rawQuery(
+            "SELECT id, imported_at, source_sha256, payload_json FROM csv_imports ORDER BY imported_at",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                csvImports.put(
+                    JSONObject(cursor.getString(3))
+                        .put("id", cursor.getLong(0))
+                        .put("imported_at", cursor.getLong(1))
+                        .put("source_sha256", cursor.getString(2))
+                )
+            }
+        }
+        root.put("csv_imports", csvImports)
         return root.toString(2)
     }
+
+    private fun ScioCsvImport.toJson(): JSONObject {
+        val preambleJson = JSONObject()
+        preamble.forEach { (key, value) -> preambleJson.put(key, value) }
+        val recordsJson = JSONArray()
+        records.forEach { record ->
+            val metadataJson = JSONObject()
+            record.metadata.forEach { (key, value) -> metadataJson.put(key, value) }
+            val seriesJson = JSONObject()
+            record.series.forEach { (group, series) ->
+                seriesJson.put(
+                    group.csvPrefix,
+                    JSONObject()
+                        .put("wavelengths_nm", series.wavelengths.toJsonArray())
+                        .put("values", series.values.toJsonArray())
+                )
+            }
+            recordsJson.put(
+                JSONObject()
+                    .put("source_row", record.sourceRow)
+                    .put("sample_id", record.sampleId)
+                    .put("metadata", metadataJson)
+                    .put("series", seriesJson)
+            )
+        }
+        return JSONObject()
+            .put("source_name", sourceName)
+            .put("layout", layout.name)
+            .put("preamble", preambleJson)
+            .put("records", recordsJson)
+    }
+
+    private fun DoubleArray.toJsonArray(): JSONArray =
+        JSONArray().also { array -> forEach { value -> array.put(value) } }
 
     private fun encodePackets(packets: List<ByteArray>): ByteArray {
         val output = ByteArrayOutputStream()
@@ -235,6 +369,6 @@ class MaterialDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "scio_material_memory.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
     }
 }

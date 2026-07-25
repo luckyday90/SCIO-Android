@@ -11,6 +11,11 @@ Funzioni principali:
 - assemblaggio tre sezioni;
 - database SQLite locale;
 - confronto sperimentale;
+- importazione persistente dei CSV SCiO con colonne `band740`–`band1070`;
+- importazione degli export sviluppatore con `spectrum_*`, `wr_raw_*` e `sample_raw_*`;
+- importazione delle tabelle verticali `wavelength,reflectance`;
 - esportazione JSON.
 
-Guida completa: `../../docs/COMPILAZIONE_SU_MAC.md`.
+Guida completa: [`docs/COMPILAZIONE_MAC.md`](docs/COMPILAZIONE_MAC.md).
+
+Dettagli e formati supportati: [`docs/IMPORTAZIONE_CSV.md`](docs/IMPORTAZIONE_CSV.md).

@@ -71,6 +71,54 @@ class ScioCsvImporterTest {
     }
 
     @Test
+    fun parsesAxisFirstCalibrationTableAndSortsWavelengths() {
+        val csv = """
+            "wavelength","reflectance"
+            790,0.99
+            324,1.06
+            326,1.07
+            740,1.01
+        """.trimIndent()
+
+        val result = ScioCsvImporter.parse("scio_calibration_plate_Polypen.csv", csv)
+
+        assertEquals(ScioCsvLayout.AXIS_FIRST, result.layout)
+        assertEquals(1, result.records.size)
+        assertEquals("scio_calibration_plate_Polypen", result.records.single().sampleId)
+        assertEquals("reflectance", result.records.single().metadata["value_column"])
+        assertEquals(setOf(SpectralGroup.SPECTRUM), result.groups)
+        assertEquals(324.0, result.wavelengthStart, 0.0)
+        assertEquals(790.0, result.wavelengthEnd, 0.0)
+        val spectrum = result.records.single().series.getValue(SpectralGroup.SPECTRUM)
+        assertArrayEquals(
+            doubleArrayOf(324.0, 326.0, 740.0, 790.0),
+            spectrum.wavelengths,
+            0.0
+        )
+        assertArrayEquals(
+            doubleArrayOf(1.06, 1.07, 1.01, 0.99),
+            spectrum.values,
+            0.0
+        )
+    }
+
+    @Test
+    fun rejectsDuplicateAxisFirstWavelengths() {
+        val csv = """
+            wavelength,reflectance
+            740,1.0
+            740.0,1.1
+        """.trimIndent()
+
+        val error = runCatching {
+            ScioCsvImporter.parse("duplicate-axis.csv", csv)
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error?.message.orEmpty().contains("duplicate"))
+    }
+
+    @Test
     fun reportsMissingValueWithSourceRowAndWavelength() {
         val wavelengths = 740..1070
         val header = wavelengths.joinToString(",") { "band$it" }

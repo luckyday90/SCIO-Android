@@ -513,7 +513,7 @@ private fun DataScreen(vm: ScioViewModel) {
                         Text(csvImport.fileName, fontWeight = FontWeight.Bold)
                         Text(
                             "${csvImport.recordCount} record · " +
-                                "${csvImport.layout.name.lowercase()} · " +
+                                "${csvImport.layout.displayName} · " +
                                 "${"%.0f".format(csvImport.wavelengthStart)}–" +
                                 "${"%.0f".format(csvImport.wavelengthEnd)} nm"
                         )
